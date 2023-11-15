@@ -18,18 +18,19 @@ package gogoevents
 // Remember to use receiver ops goroutine and channel to perform operations on receivers.
 
 type Receiver[EData any] struct {
-	_ch      chan Event[EData]
-	patterns map[string]void
+	_ch     chan Event[EData]
+	pattern string
 }
 
-func newReceiver[EData any]() Receiver[EData] {
+func newReceiver[EData any](pattern string) Receiver[EData] {
 	return Receiver[EData]{
-		_ch:      make(chan Event[EData]),
-		patterns: make(map[string]struct{}, 1),
+		_ch:     make(chan Event[EData]),
+		pattern: pattern,
 	}
 }
 
 func (r Receiver[EData]) Ch() <-chan Event[EData] { return r._ch }
+func (r Receiver[EData]) Pattern() string         { return r.pattern }
 
 func (this Receiver[EData]) EqualTo(r Receiver[EData]) bool { return this._ch == r._ch }
 

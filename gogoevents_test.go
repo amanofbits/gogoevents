@@ -26,7 +26,7 @@ func Benchmark(b *testing.B) {
 	b.StopTimer()
 
 	eb := gogoevents.NewUntyped()
-	recvs := make([]gogoevents.Receiver[any], 10)
+	recvs := make([]gogoevents.Receiver[any], 100)
 	for i := 0; i < len(recvs); i++ {
 		recvs[i] = eb.Subscribe("t*")
 	}
@@ -65,33 +65,6 @@ func TestSmoke(t *testing.T) {
 	case v, ok := <-r.Ch():
 		if !ok {
 			t.Fatal("no event, channel closed")
-		}
-		v.Done()
-	case <-cl:
-		t.Fatal("no event received")
-	}
-}
-
-func TestAddSubscription(t *testing.T) {
-	eb := gogoevents.NewUntyped()
-	r := eb.Subscribe("test")
-	eb.AddSubscription("test2", r)
-
-	eb.Publish("test2", nil)
-
-	cl := make(chan any)
-	go func() {
-		time.Sleep(time.Second)
-		close(cl)
-	}()
-
-	select {
-	case v, ok := <-r.Ch():
-		if !ok {
-			t.Fatal("no event, channel closed")
-		}
-		if v.Topic != "test2" {
-			t.Fatalf("wrong topic. Wanted %s, got %s", "test2", v.Topic)
 		}
 		v.Done()
 	case <-cl:

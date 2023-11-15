@@ -25,10 +25,6 @@ import (
 	"github.com/amanofbits/gogoevents/internal/wildcard"
 )
 
-type void = struct{}
-
-var dummy = void{}
-
 type Bus[EData any] struct {
 	recvs *receiverCollection[EData]
 }
@@ -49,13 +45,9 @@ func (b *Bus[EData]) Close() error {
 }
 
 func (b *Bus[EData]) Subscribe(pattern string) (recv Receiver[EData]) {
-	recv = newReceiver[EData]()
-	b.recvs.add(recv, pattern)
+	recv = newReceiver[EData](pattern)
+	b.recvs.add(recv)
 	return recv
-}
-
-func (b *Bus[EData]) AddSubscription(pattern string, recv Receiver[EData]) {
-	b.recvs.add(recv, pattern)
 }
 
 // Syntactic sugar for subscribing callback function to topic pattern.
@@ -125,8 +117,8 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 		evName = m.Name[:len(m.Name)-len(handlerSuffix)]
 		pattern := topicPrefix + evName
 
-		recv := newReceiver[EData]()
-		b.recvs.add(recv, pattern)
+		recv := newReceiver[EData](pattern)
+		b.recvs.add(recv)
 
 		go func(r Receiver[EData], m reflect.Method, numIn int) {
 			in := make([]reflect.Value, numIn)
@@ -150,8 +142,8 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 // If optional patterns are specified, unsubscribes only from these patterns.
 // If receiver has no more topics after this operation, its channel gets closed before return.
 // Patterns here does not use wildcard matching and are matched as is.
-func (b *Bus[EData]) Unsubscribe(recv Receiver[EData], patterns ...string) bool {
-	return b.recvs.remove(recv, patterns...)
+func (b *Bus[EData]) Unsubscribe(recv Receiver[EData]) bool {
+	return b.recvs.remove(recv)
 }
 
 var ErrIllegalWildcard = errors.New("wildcards not allowed in topic")
@@ -181,11 +173,6 @@ func (b *Bus[EData]) PublishSync(topic string, data EData) error {
 
 	wg.Wait()
 	return nil
-}
-
-// Return patterns that recv is subscribed to.
-func (b *Bus[EData]) GetPatterns(recv Receiver[EData]) []string {
-	return b.recvs.getPatterns(recv)
 }
 
 func (b *Bus[EData]) dispatch(ev Event[EData], recvs []Receiver[EData]) {

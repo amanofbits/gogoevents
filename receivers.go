@@ -64,15 +64,14 @@ func (c *receiverCollection[EData]) runOpsProcessor() {
 
 // adds receiver to specified pattern.
 // receiver may or may not already exist in collection.
-func (c *receiverCollection[EData]) add(recv Receiver[EData], pattern string) (added bool) {
+func (c *receiverCollection[EData]) add(recv Receiver[EData]) (added bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, already := recv.patterns[pattern]; already {
+	if _, already := c.byPattern[recv.pattern]; already {
 		return false
 	}
-	c.byPattern[pattern] = append(c.byPattern[pattern], recv)
-	recv.patterns[pattern] = dummy
+	c.byPattern[recv.pattern] = append(c.byPattern[recv.pattern], recv)
 
 	if !slices.ContainsFunc(c.all, recv.EqualTo) {
 		c.all = append(c.all, recv)
@@ -81,50 +80,17 @@ func (c *receiverCollection[EData]) add(recv Receiver[EData], pattern string) (a
 }
 
 // Patterns do not use wildcard matching, they are matched as is.
-func (c *receiverCollection[EData]) remove(recv Receiver[EData], patterns ...string) bool {
-	matched := make([]string, 0, 1)
+func (c *receiverCollection[EData]) remove(recv Receiver[EData]) bool {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	switch len(patterns) {
-	case 0:
-		for rp := range recv.patterns {
-			matched = append(matched, rp)
-		}
-	case 1:
-		matched = append(matched, patterns[0])
-	default:
-		for i := 0; i < len(patterns); i++ {
-			_, ok := recv.patterns[patterns[i]]
-			if !ok {
-				continue
-			}
-			matched = append(matched, patterns[i])
-			patterns = slices.Delete(patterns, i, i+1)
-			i--
-		}
-	}
-
-	if len(matched) == 0 {
-		return false
-	}
-
 	clear(c.topicCache)
 
-	for _, mp := range matched {
-		recvsLen := len(c.byPattern[mp])
-		c.byPattern[mp] = slices.DeleteFunc(c.byPattern[mp], recv.EqualTo)
-		if recvsLen == len(c.byPattern[mp]) {
-			panic("receiver wasn't removed, shouldn't happen")
-		}
-		delete(recv.patterns, mp)
-	}
-
-	if len(recv.patterns) == 0 {
-		c.recvOps <- closeOp[EData](recv)
-	}
-	return true
+	recvsLen := len(c.byPattern[recv.pattern])
+	c.byPattern[recv.pattern] = slices.DeleteFunc(c.byPattern[recv.pattern], recv.EqualTo)
+	c.recvOps <- closeOp[EData](recv)
+	return recvsLen == len(c.byPattern[recv.pattern])
 }
 
 func (c *receiverCollection[EData]) get(topic string) (r []Receiver[EData]) {
@@ -150,17 +116,6 @@ func (c *receiverCollection[EData]) get(topic string) (r []Receiver[EData]) {
 	return r
 }
 
-func (c *receiverCollection[EData]) getPatterns(recv Receiver[EData]) []string {
-	c.mu.RLock()
-	defer c.mu.Unlock()
-
-	ps := make([]string, len(recv.patterns))
-	for p := range recv.patterns {
-		ps = append(ps, p)
-	}
-	return ps
-}
-
 func (c *receiverCollection[EData]) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -168,7 +123,6 @@ func (c *receiverCollection[EData]) close() {
 	clear(c.byPattern)
 	clear(c.topicCache)
 	for _, recv := range c.all {
-		clear(recv.patterns)
 		c.recvOps <- closeOp[EData](recv)
 	}
 	c.closed <- true
