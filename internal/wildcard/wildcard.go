@@ -1,5 +1,5 @@
 /*
- * Wildcard string matching algorithm, derived from:
+ * Wildcard string matching algorithm, taken and slightly modified from:
  * https://github.com/IGLOU-EU/go-wildcard/blob/2f93770ccbe7d1f3e102221d88ade4c0ecca52be/wildcard.go
  *
  * Original code copyright:
@@ -115,4 +115,13 @@ checkPattern:
 	}
 
 	return patternIndex == patternLen
+}
+
+func Index(s string) int {
+	for i, r := range []rune(s) {
+		if r == '*' || r == '?' {
+			return i
+		}
+	}
+	return -1
 }
