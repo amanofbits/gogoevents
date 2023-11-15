@@ -22,12 +22,36 @@ import (
 	"github.com/amanofbits/gogoevents"
 )
 
+func Benchmark(b *testing.B) {
+	b.StopTimer()
+
+	eb := gogoevents.NewUntyped()
+	recvs := make([]gogoevents.Receiver[any], 10)
+	for i := 0; i < len(recvs); i++ {
+		recvs[i] = eb.Subscribe("t*")
+	}
+	//
+	for _, recv := range recvs {
+		go func(recv gogoevents.Receiver[any]) {
+			for range recv.Ch() {
+			}
+		}(recv)
+	}
+
+	for i := 0; i < b.N; i++ {
+		b.StartTimer()
+		eb.Publish("test", nil)
+		b.StopTimer()
+	}
+	eb.Close()
+}
+
 func TestSmoke(t *testing.T) {
 	eb := gogoevents.NewUntyped()
 	r := eb.Subscribe("test")
 
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		eb.Publish("test", nil)
 	}()
 
@@ -91,7 +115,7 @@ func TestSubscribeCallback(t *testing.T) {
 
 	eb.Publish("test", nil)
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	if !fired {
 		t.Fatal("not fired")
 	}
