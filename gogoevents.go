@@ -18,21 +18,19 @@ package gogoevents
 import (
 	"errors"
 	"fmt"
-	"log"
-	"math"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 
-	"github.com/amanofbits/gogoevents/wildcard"
+	"github.com/amanofbits/gogoevents/internal/wildcard"
 )
 
+type void = struct{}
+
+var dummy = void{}
+
 type Bus[EData any] struct {
-	mu         sync.RWMutex
-	recvs      map[string][]receiver[EData]
-	totalRecvs atomic.Int32
+	recvs *receiverCollection[EData]
 }
 
 func NewUntyped() *Bus[any] {
@@ -40,60 +38,45 @@ func NewUntyped() *Bus[any] {
 }
 
 func New[EData any]() *Bus[EData] {
-	return &Bus[EData]{recvs: make(map[string][]receiver[EData])}
+	return &Bus[EData]{
+		recvs: newReceiverCollection[EData](),
+	}
 }
 
 func (b *Bus[EData]) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	r := make([]receiver[EData], 0, b.totalRecvs.Load())
-	for _, recvs := range b.recvs {
-		r = append(r, recvs...)
-	}
-
-	for _, recv := range r {
-		for p := range recv.patterns {
-			b.removeReceiver(recv, p)
-		}
-	}
+	b.recvs.close()
 	return nil
 }
 
-func (b *Bus[EData]) Subscribe(pattern string) (recv receiver[EData]) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	recv = receiver[EData]{ch: make(chan Event[EData]), patterns: map[string]nothing{pattern: 0}}
-	b.addReceiver(recv, pattern)
+func (b *Bus[EData]) Subscribe(pattern string) (recv Receiver[EData]) {
+	recv = newReceiver[EData]()
+	b.recvs.add(recv, pattern)
 	return recv
 }
 
-func (b *Bus[EData]) AddSubscription(pattern string, recv receiver[EData]) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	_, ok := recv.patterns[pattern]
-	if ok {
-		return
-	}
-	b.addReceiver(recv, pattern)
+func (b *Bus[EData]) AddSubscription(pattern string, recv Receiver[EData]) {
+	b.recvs.add(recv, pattern)
 }
 
-func (b *Bus[EData]) SubscribeCallback(pattern string, cb func(ev Event[EData])) {
-	go func(r receiver[EData]) {
+// Syntactic sugar for subscribing callback function to topic pattern.
+// Returns receiver that can be used for unsubscribing.
+func (b *Bus[EData]) SubscribeCallback(pattern string, cb func(ev Event[EData])) Receiver[EData] {
+	recv := b.Subscribe(pattern)
+	go func(r Receiver[EData]) {
 		for {
-			d, ok := <-r.ch
+			d, ok := <-r._ch
 			if !ok {
 				break
 			}
 			cb(d)
 		}
-	}(b.Subscribe(pattern))
+	}(recv)
+	return recv
 }
 
 var ErrIllegalParamType = errors.New("illegal parameter type")
 var ErrIllegalParamCount = errors.New("illegal parameter count")
+var ErrReturnValuesPresent = errors.New("return values present and not allowed")
 
 // TODO: add UnsubscribeObject
 
@@ -107,9 +90,6 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 	if handlerSuffix == "" {
 		handlerSuffix = "Handler"
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	rVal := reflect.ValueOf(obj)
 	if rVal.Kind() != reflect.Pointer && rVal.Kind() != reflect.Interface {
@@ -126,6 +106,9 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 			continue
 		}
 
+		if m.Type.NumOut() > 0 {
+			return subCount, fmt.Errorf("%s: %w", m.Name, ErrReturnValuesPresent)
+		}
 		numIn := m.Type.NumIn()
 		switch numIn {
 		case 0:
@@ -133,21 +116,22 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 			t0 := m.Type.In(0)
 			etName := reflect.TypeOf(Event[EData]{}).Name()
 			if t0.Name() != etName {
-				return subCount, fmt.Errorf("%w, expected %s, got %s", ErrIllegalParamType, etName, t0)
+				return subCount, fmt.Errorf("%s: %w, expected %s, got %s", m.Name, ErrIllegalParamType, etName, t0)
 			}
 		default:
-			return subCount, fmt.Errorf("%w, expected 1, got %d", ErrIllegalParamCount, numIn)
+			return subCount, fmt.Errorf("%s: %w, expected 1, got %d", m.Name, ErrIllegalParamCount, numIn)
 		}
 
 		evName = m.Name[:len(m.Name)-len(handlerSuffix)]
 		pattern := topicPrefix + evName
 
-		recv := receiver[EData]{ch: make(chan Event[EData]), patterns: map[string]nothing{pattern: 0}}
-		b.addReceiver(recv, pattern)
-		go func(r receiver[EData], m reflect.Method, numIn int) {
+		recv := newReceiver[EData]()
+		b.recvs.add(recv, pattern)
+
+		go func(r Receiver[EData], m reflect.Method, numIn int) {
 			in := make([]reflect.Value, numIn)
 			for {
-				d, ok := <-r.ch
+				d, ok := <-r._ch
 				if !ok {
 					break
 				}
@@ -162,94 +146,50 @@ func (b *Bus[EData]) SubscribeObject(obj any, handlerSuffix, topicPrefix string)
 	return subCount, nil
 }
 
-func (b *Bus[EData]) Unsubscribe(topic string, recv receiver[EData]) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.removeReceiver(recv, topic)
+// Removes specified receiver from subscriptions.
+// If optional patterns are specified, unsubscribes only from these patterns.
+// If receiver has no more topics after this operation, its channel gets closed before return.
+// Patterns here does not use wildcard matching and are matched as is.
+func (b *Bus[EData]) Unsubscribe(recv Receiver[EData], patterns ...string) bool {
+	return b.recvs.remove(recv, patterns...)
 }
 
-func (b *Bus[EData]) addReceiver(recv receiver[EData], pattern string) {
-	if slices.ContainsFunc(b.recvs[pattern], recv.EqualTo) {
-		return
-	}
-	b.recvs[pattern] = append(b.recvs[pattern], recv)
-	recv.addPattern(pattern)
-	b.totalRecvs.Add(1)
-}
-
-func (b *Bus[EData]) removeReceiver(recv receiver[EData], pattern string) bool {
-	patterns := make([]string, 0, 1)
-	for rp := range recv.patterns {
-		if wildcard.Match(pattern, rp) {
-			patterns = append(patterns, rp)
-		}
-	}
-	if len(patterns) == 0 {
-		return false
-	}
-
-	for _, rp := range patterns {
-		l := len(b.recvs[rp])
-		b.recvs[rp] = slices.DeleteFunc(b.recvs[rp], recv.EqualTo)
-		if l == len(b.recvs[rp]) {
-			panic("shouldn't happen")
-		}
-		recv.removePattern(rp)
-		b.totalRecvs.Add(-1)
-	}
-	if len(recv.patterns) == 0 {
-		close(recv.ch)
-	}
-	return true
-}
+var ErrIllegalWildcard = errors.New("wildcards not allowed in topic")
 
 // Publishes event asynchronously and returns immediately.
-func (b *Bus[EData]) Publish(topic string, data EData) {
-	dispatch(Event[EData]{Topic: topic, Data: data}, b.getPatternReceivers(topic))
+// Returns `ErrIllegalWildcard` if wildcard is found in the `topic`
+func (b *Bus[EData]) Publish(topic string, data EData) error {
+	if wci := wildcard.Index(topic); wci >= 0 {
+		return fmt.Errorf("%s, at %d: %w", topic, wci, ErrIllegalWildcard)
+	}
+	b.dispatch(Event[EData]{Topic: topic, Data: data}, b.recvs.get(topic))
+	return nil
 }
 
-// Publishes event synchronously. No goroutine involved.
-func (b *Bus[EData]) PublishSync(topic string, data EData) {
-	dispatchSync(Event[EData]{Topic: topic, Data: data}, b.getPatternReceivers(topic))
-}
-
-// Publishes event asynchronously,
-// and waits until all subscribers dispatch it.
+// Publishes event and waits until all subscribers dispatch it.
 // Subscribers must call event.Done() when finished, otherwise PublishWait never returns.
-func (b *Bus[EData]) PublishWait(topic string, data EData) {
-	receivers := b.getPatternReceivers(topic)
+// Returns `ErrIllegalWildcard` if wildcard is found in the `topic`
+func (b *Bus[EData]) PublishSync(topic string, data EData) error {
+	if wci := wildcard.Index(topic); wci >= 0 {
+		return fmt.Errorf("%s, at %d: %w", topic, wci, ErrIllegalWildcard)
+	}
+	recvs := b.recvs.get(topic)
 	wg := sync.WaitGroup{}
-	wg.Add(len(receivers))
+	wg.Add(len(recvs))
 
-	dispatch(Event[EData]{Topic: topic, Data: data, wg: &wg}, receivers)
+	b.dispatch(Event[EData]{Topic: topic, Data: data, wg: &wg}, recvs)
 
 	wg.Wait()
+	return nil
 }
 
-func (b *Bus[EData]) getPatternReceivers(pattern string) (r []receiver[EData]) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	div := 1 + int(math.Log2(float64(b.totalRecvs.Load())))
-	expectedCap := int(b.totalRecvs.Load()) / div
-	r = make([]receiver[EData], 0, expectedCap)
-
-	for topic, recvs := range b.recvs {
-		if topic == pattern || wildcard.Match(pattern, topic) {
-			r = append(r, recvs...)
-		}
-	}
-	log.Printf("receivers, cap wanted %d, got %d", expectedCap, len(r))
-	return r
+// Return patterns that recv is subscribed to.
+func (b *Bus[EData]) GetPatterns(recv Receiver[EData]) []string {
+	return b.recvs.getPatterns(recv)
 }
 
-func dispatch[EData any](ev Event[EData], recvs []receiver[EData]) {
-	go dispatchSync(ev, recvs)
-}
-
-func dispatchSync[EData any](ev Event[EData], recvs []receiver[EData]) {
+func (b *Bus[EData]) dispatch(ev Event[EData], recvs []Receiver[EData]) {
 	for _, recv := range recvs {
-		recv.ch <- ev
+		b.recvs.recvOps <- pushOp[EData]{recv: recv, ev: ev}
 	}
 }
