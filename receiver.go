@@ -1,5 +1,5 @@
 /*
- * Holds event receiver
+ * Holds event receiver and operations that are applicable to them
  *
  * Copyright © 2023 amanofbits
  *
@@ -15,21 +15,42 @@
 
 package gogoevents
 
-type nothing = uint8
+// Remember to use receiver ops goroutine and channel to perform operations on receivers.
 
-type receiver[EData any] struct {
-	ch       chan Event[EData]
-	patterns map[string]nothing
+type Receiver[EData any] struct {
+	_ch      chan Event[EData]
+	patterns map[string]void
 }
 
-func (r receiver[EData]) Ch() chan Event[EData] { return r.ch }
-
-func (r *receiver[EData]) addPattern(p string) {
-	r.patterns[p] = 0
+func newReceiver[EData any]() Receiver[EData] {
+	return Receiver[EData]{
+		_ch:      make(chan Event[EData]),
+		patterns: make(map[string]struct{}, 1),
+	}
 }
 
-func (r *receiver[EData]) removePattern(p string) {
-	delete(r.patterns, p)
+func (r Receiver[EData]) Ch() <-chan Event[EData] { return r._ch }
+
+func (this Receiver[EData]) EqualTo(r Receiver[EData]) bool { return this._ch == r._ch }
+
+// Operation that can be applied to receivers.
+// Processed sequentially in a goroutine.
+// This is done to prevent situations when e.g. event is being sent to the channel that was just closed.
+type recvOp[EData any] interface {
+	do()
 }
 
-func (this receiver[EData]) EqualTo(r receiver[EData]) bool { return this.ch == r.ch }
+type pushOp[EData any] struct {
+	recv Receiver[EData]
+	ev   Event[EData]
+}
+
+func (op pushOp[EData]) do() {
+	op.recv._ch <- op.ev
+}
+
+type closeOp[EData any] Receiver[EData]
+
+func (op closeOp[EData]) do() {
+	close(Receiver[EData](op)._ch)
+}
