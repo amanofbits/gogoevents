@@ -15,19 +15,27 @@
 
 package gogoevents
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
+// Event. Don't pass by reference.
 type Event[EData any] struct {
-	Topic string
-	Data  EData
+	done  *atomic.Bool
+	Data  *EData
 	wg    *sync.WaitGroup
+	Topic string
 }
 
-// This needs to e called when handling is completed.
-// In case of PublishWait events, call to Done() is essential for method to return.
-// In case of simple Publish, Done() is a no-op.
+// If you have code waiting for Publish to process events,
+// then Done() can be used to signal that this event instance is done processind earlier than the handler actually returns.
+//   - It is not *necessary* to call Done.
+//   - It's safe although with no effect to call Done after handler returns (e.g. in goroutine).
+//   - It's safe to call Done() multiple times and from different Goroutines but try not to hold event objects
+//     longer than their expected lifetime
 func (ev *Event[EData]) Done() {
-	if ev.wg != nil {
-		ev.Done()
+	if ev.done.CompareAndSwap(false, true) {
+		ev.wg.Done()
 	}
 }
