@@ -16,7 +16,6 @@
 package gogoevents_test
 
 import (
-	"fmt"
 	"log"
 	"strconv"
 	"sync/atomic"
@@ -123,9 +122,8 @@ func BenchmarkEventPublish(b *testing.B) {
 }
 
 func BenchmarkSubscribe(b *testing.B) {
-	fmt.Println("N", b.N)
 	topic := "testevent"
-	subsCount := 100
+	subsCount := 1000
 
 	subs := make([]gogoevents.Subscriber[any], subsCount)
 	t := ""
