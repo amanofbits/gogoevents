@@ -1,4 +1,4 @@
-# Gogoevents
+# Go-go-events
 
 Simple event bus for Golang.
 
