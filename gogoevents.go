@@ -18,7 +18,6 @@ package gogoevents
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -140,12 +139,15 @@ func (b *Bus[EData]) Subscribe(pattern string, handler func(ev Event[EData])) Su
 		}
 		return 0
 	})
-	b.patterns = slices.Insert(b.patterns, pos, pattern)
 
-	b.subs = slices.Insert(b.subs, pos, Subscriber[EData]{
-		handler: handler,
-		id:      newUniqueId(),
-	})
+	// Below code works because items are stored by value. Spares few ns.
+	b.patterns = shift(b.patterns, pos)
+	b.patterns[pos] = pattern
+
+	b.subs = shift(b.subs, pos)
+	b.subs[pos].handler = handler
+	b.subs[pos].id = newUniqueId()
+
 	return b.subs[pos]
 }
 
@@ -154,42 +156,17 @@ func (b *Bus[EData]) Unsubscribe(sub Subscriber[EData]) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	clear(b.topicCache)
-
 	idx := 0
 	for ; idx < len(b.subs); idx++ {
 		if b.subs[idx].id == sub.id {
 			break
 		}
 	}
-
-	b.subs = append(b.subs[:idx], b.subs[idx:]...)
-	return true
-}
-
-// Modified copy from slices.BinarySearchFunc, Go 1.21.4, with element index.
-// Why not include item's index into comparison function?..
-//
-// The slice must be sorted in increasing order, where "increasing"
-// is defined by cmp. cmp should return 0 if the slice element matches
-// the target, a negative number if the slice element precedes the target,
-// or a positive number if the slice element follows the target.
-// cmp must implement the same ordering as the slice, such that if
-// cmp(a, t) < 0 and cmp(b, t) >= 0, then a must precede b in the slice.
-func binarySearchFunc[S ~[]E, E, T any](x S, target T, cmp func(E, T, int) int) (int, bool) {
-	n := len(x)
-	// Define cmp(x[-1], target) < 0 and cmp(x[n], target) >= 0 .
-	// Invariant: cmp(x[i - 1], target) < 0, cmp(x[j], target) >= 0.
-	i, j := 0, n
-	for i < j {
-		h := int(uint(i+j) >> 1) // avoid overflow when computing h
-		// i ≤ h < j
-		if cmp(x[h], target, h) < 0 {
-			i = h + 1 // preserves cmp(x[i - 1], target) < 0
-		} else {
-			j = h // preserves cmp(x[j], target) >= 0
-		}
+	if idx == len(b.subs) {
+		return false
 	}
-	// i == j, cmp(x[i-1], target) < 0, and cmp(x[j], target) (= cmp(x[i], target)) >= 0  =>  answer is i.
-	return i, i < n && cmp(x[i], target, i) == 0
+	b.subs = append(b.subs[:idx], b.subs[idx+1:]...)
+	b.patterns = append(b.patterns[:idx], b.patterns[idx+1:]...)
+	clear(b.topicCache)
+	return true
 }
