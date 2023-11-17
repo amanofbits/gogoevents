@@ -122,6 +122,8 @@ func handle[EData any](sub Subscriber[EData], ev Event[EData], done *atomic.Bool
 }
 
 func (b *Bus[EData]) Subscribe(pattern string, handler func(ev Event[EData])) Subscriber[EData] {
+	pattern = wildcard.Normalize(pattern)
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

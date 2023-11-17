@@ -100,3 +100,22 @@ func Index(s string) int {
 	}
 	return -1
 }
+
+// Removes redundand consecutive wildcards and returns modified string
+func Normalize(s string) string {
+	if len(s) < 2 {
+		return s
+	}
+	sr := []rune(s)
+	for i, j := 1, -1; i < len(sr); i++ {
+		if sr[i] != '*' || sr[i-1] != '*' {
+			continue
+		}
+		for j = i + 1; j < len(sr) && sr[j] == '*'; {
+			j++
+		}
+		sr = append(sr[:i], sr[j:]...)
+		i--
+	}
+	return string(sr)
+}
