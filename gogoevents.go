@@ -25,10 +25,11 @@ import (
 )
 
 type Bus[EData any] struct {
-	topicCache map[string][]uint32
-	patterns   []string
-	subs       []Subscriber[EData]
-	mu         sync.RWMutex
+	unhandledSink func(Event[EData])
+	topicCache    map[string][]uint32
+	patterns      []string
+	subs          []Subscriber[EData]
+	mu            sync.RWMutex
 }
 
 func NewUntyped() *Bus[any] {
@@ -46,6 +47,7 @@ func (b *Bus[EData]) Close() error {
 	clear(b.topicCache)
 	b.patterns = b.patterns[:0]
 	b.subs = b.subs[:0]
+	b.unhandledSink = nil
 	return nil
 }
 
@@ -66,12 +68,17 @@ func (b *Bus[EData]) Publish(topic string, data EData) (*sync.WaitGroup, error) 
 	}
 
 	wg := sync.WaitGroup{}
+	ev := Event[EData]{Topic: topic, Data: &data, wg: &wg}
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	if len(b.patterns) == 0 {
 		wg.Add(0)
+		if b.unhandledSink != nil {
+			wg.Add(1)
+			go handle(b.unhandledSink, ev, &atomic.Bool{})
+		}
 		return &wg, nil
 	}
 
@@ -105,18 +112,20 @@ func (b *Bus[EData]) Publish(topic string, data EData) (*sync.WaitGroup, error) 
 	}
 	wg.Add(len(indices))
 
-	ev := Event[EData]{Topic: topic, Data: &data, wg: &wg}
 	dones := make([]atomic.Bool, len(indices))
 
 	for i := 0; i < len(indices); i++ {
-		go handle(b.subs[indices[i]], ev, &dones[i])
+		go handle(b.subs[indices[i]].handler, ev, &dones[i])
+	}
+	if b.unhandledSink != nil && len(indices) == 0 {
+		go handle(b.unhandledSink, ev, &atomic.Bool{})
 	}
 	return &wg, nil
 }
 
-func handle[EData any](sub Subscriber[EData], ev Event[EData], done *atomic.Bool) {
+func handle[EData any](handler func(Event[EData]), ev Event[EData], done *atomic.Bool) {
 	ev.done = done
-	sub.handler(ev)
+	handler(ev)
 	ev.Done()
 }
 
@@ -169,4 +178,13 @@ func (b *Bus[EData]) Unsubscribe(sub Subscriber[EData]) bool {
 	b.patterns = append(b.patterns[:idx], b.patterns[idx+1:]...)
 	clear(b.topicCache)
 	return true
+}
+
+// Registers sink for events that are published but have no subscribers at the time.
+// Simply set to nil to unregister.
+func (b *Bus[EData]) SetUnhandledSink(sink func(ev Event[EData])) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.unhandledSink = sink
 }

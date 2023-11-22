@@ -145,6 +145,80 @@ func TestUnsubscribeLast(t *testing.T) {
 	}
 }
 
+func TestUnhandledSinkGetsEvent(t *testing.T) {
+	eb := NewUntyped()
+
+	got := atomic.Int32{}
+	sink := func(ev Event[any]) {
+		got.Add(1)
+	}
+
+	eb.SetUnhandledSink(sink)
+
+	wg, err := eb.Publish("any", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+
+	gotVal := got.Load()
+	if gotVal != 1 {
+		t.Fatalf("Expected 1 event, got %d", gotVal)
+	}
+
+	eb.Close()
+}
+
+func TestUnhandledSinkIsWaitedFor(t *testing.T) {
+	eb := NewUntyped()
+
+	got := atomic.Int32{}
+	sink := func(ev Event[any]) {
+		time.Sleep(200 * time.Millisecond)
+		got.Add(1)
+	}
+
+	eb.SetUnhandledSink(sink)
+
+	wg, err := eb.Publish("any", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+
+	gotVal := got.Load()
+	if gotVal != 1 {
+		t.Fatalf("Expected 1 event, got %d", gotVal)
+	}
+
+	eb.Close()
+}
+
+func TestUnhandledSinkSkipsHandledEvent(t *testing.T) {
+	eb := NewUntyped()
+
+	got := atomic.Int32{}
+	sink := func(ev Event[any]) {
+		got.Add(1)
+	}
+
+	eb.SetUnhandledSink(sink)
+	eb.Subscribe("any", func(ev Event[any]) {})
+
+	wg, err := eb.Publish("any", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+
+	gotVal := got.Load()
+	if gotVal != 0 {
+		t.Fatalf("Expected 0 event, got %d", gotVal)
+	}
+
+	eb.Close()
+}
+
 func BenchmarkUnsubscribe(b *testing.B) {
 	b.StopTimer()
 	b.ResetTimer()
