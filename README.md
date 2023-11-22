@@ -1,4 +1,4 @@
-# Go-go-events
+# Go-go-events ![Go-pkg doc](https://img.shields.io/badge/Go--pkg-doc-blue?link=https%3A%2F%2Fpkg.go.dev%2Fgithub.com%2Famanofbits%2Fgogoevents) [![Go Report Card](https://goreportcard.com/badge/github.com/amanofbits/gogoevents)](https://goreportcard.com/report/github.com/amanofbits/gogoevents)
 
 Simple event bus for Golang.
 
