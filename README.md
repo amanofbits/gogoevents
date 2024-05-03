@@ -7,6 +7,7 @@ Simple event bus for Golang.
 - concurrency support
 - fast (I hope, not yet tested thoroughly)
 - non-blocking events - every subscriber receives the event in its own goroutine
+- has a dedicated sink for unhandled events (the ones that are not subscribed to)
 
 ## Attributions
 
