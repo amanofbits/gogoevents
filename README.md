@@ -5,9 +5,11 @@ Simple event bus for Golang.
 - no dependencies
 - simple
 - concurrency support
-- fast (I hope, not yet tested thoroughly)
+- generic - supports custom-defined event object per bus
+- supports wildcard subscribers
+- fast (I hope, not yet tested thoroughly. Some benchmarks included)
 - non-blocking events - every subscriber receives the event in its own goroutine
-- has a dedicated sink for unhandled events (the ones that are not subscribed to)
+- has a dedicated sink for unhandled events (the ones that are not subscribed to). Useful for e.g. debugging and logging lost events.
 
 ## Attributions
 
